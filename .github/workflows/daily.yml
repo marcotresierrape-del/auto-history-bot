@@ -17,24 +17,20 @@ jobs:
         with:
           python-version: '3.9'
 
-      - name: Install System Dependencies (FFmpeg)
+      # PASO CRÍTICO: Instalación correcta de MoviePy y sus dependencias de sistema
+      - name: Install Dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y ffmpeg
+          sudo apt-get install -y ffmpeg imagemagick policykit-1
+          echo "IMAGE_MAGICK_DELEGATES=png,jpeg,tiff" >> $GITHUB_ENV
+          pip install --upgrade pip
+          pip install elevenlabs replicate requests pillow imageio-ffmpeg moviepy
 
-      - name: Upgrade Pip & Install Python Dependencies
+      - name: Verify Installation
         run: |
-          python -m pip install --upgrade pip
-          # Instalación forzada de versiones estables
-          pip install elevenlabs replicate requests pillow
-          pip install "moviepy>=1.0.3" imageio-ffmpeg
-
-      - name: Verify Installations
-        run: |
-          python -c "import moviepy; print('✅ moviepy OK')"
-          python -c "from PIL import Image; print('✅ pillow OK')"
+          python -c "import moviepy.editor; print('✅ moviepy OK')"
           python -c "import replicate; print('✅ replicate OK')"
-          python -c "import requests; print('✅ requests OK')"
+          python -c "from PIL import Image; print('✅ pillow OK')"
 
       - name: Run Generator
         env:
