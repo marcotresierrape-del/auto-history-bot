@@ -1,6 +1,6 @@
 import os
-import random
 import sys
+import random
 import requests
 from io import BytesIO
 from PIL import Image
@@ -12,8 +12,11 @@ ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 
 if not ELEVENLABS_API_KEY or not REPLICATE_API_TOKEN:
-    print("ERROR: Faltan las claves API. Revisa los Secrets de GitHub.")
+    print("❌ ERROR CRÍTICO: Faltan las claves API.")
+    print("Verifica GitHub Secrets > Actions > ELEVENLABS_API_KEY y REPLICATE_API_TOKEN")
     sys.exit(1)
+
+print("✅ Claves API cargadas correctamente.")
 
 # --- BASE DE DATOS DE TEMAS ---
 THEMES = [
@@ -55,6 +58,7 @@ def generate_script(topic):
     return script.strip()
 
 def generate_voice(script):
+    # Usamos la API directa con requests, SIN importar elevenlabs
     url = "https://api.elevenlabs.io/v1/text-to-speech/Rachel"
     headers = {
         "xi-api-key": ELEVENLABS_API_KEY,
@@ -70,16 +74,20 @@ def generate_voice(script):
     }
     
     try:
-        response = requests.post(url, json=data, headers=headers)
+        print("🎤 Generando voz con ElevenLabs API...")
+        response = requests.post(url, json=data, headers=headers, timeout=60)
+        
         if response.status_code == 200:
             with open("voiceover.mp3", "wb") as f:
                 f.write(response.content)
+            print("✅ Voz generada exitosamente.")
             return "voiceover.mp3"
         else:
-            print(f"Error ElevenLabs: {response.status_code} - {response.text}")
+            print(f"❌ Error ElevenLabs: {response.status_code}")
+            print(f"Respuesta: {response.text}")
             return None
     except Exception as e:
-        print(f"Error generando voz: {e}")
+        print(f"❌ Excepción generando voz: {e}")
         return None
 
 def generate_images(topic, style):
@@ -90,6 +98,7 @@ def generate_images(topic, style):
         f"{style}, dramatic action scene related to {topic}, dynamic angle"
     ]
     
+    print("🎨 Generando imágenes con Replicate...")
     for i, prompt in enumerate(prompts):
         try:
             output = replicate.run(
@@ -102,21 +111,32 @@ def generate_images(topic, style):
                     "num_inference_steps": 25
                 }
             )
-            img_url = output[0]
             
-            # Descargar imagen directamente
-            response = requests.get(img_url)
+            img_url = output[0]
+            print(f"  - Descargando imagen {i+1}/3...")
+            
+            response = requests.get(img_url, timeout=60)
+            if response.status_code != 200:
+                print(f"  ❌ Error descargando imagen {i+1}: {response.status_code}")
+                continue
+                
             img_data = BytesIO(response.content)
             image = Image.open(img_data)
             
             filename = f"img_{i}.png"
             image.save(filename)
             images.append(filename)
+            print(f"  ✅ Imagen {i+1} guardada.")
             
         except Exception as e:
-            print(f"Error generando imagen {i}: {e}")
+            print(f"  ❌ Error generando imagen {i+1}: {e}")
             continue
             
+    if not images:
+        print("❌ No se generaron imágenes.")
+        return None
+        
+    print(f"✅ Imágenes generadas: {len(images)}")
     return images
 
 def create_video(images, audio_file):
@@ -125,28 +145,23 @@ def create_video(images, audio_file):
         
     clips = []
     try:
+        print("🎬 Creando video final...")
         audio_duration = AudioFileClip(audio_file).duration
-    except Exception as e:
-        print(f"Error cargando audio: {e}")
-        return None
+        duration_per_img = audio_duration / len(images)
         
-    duration_per_img = audio_duration / len(images)
-    
-    for img_path in images:
-        try:
+        for idx, img_path in enumerate(images):
             clip = ImageClip(img_path).set_duration(duration_per_img)
             clips.append(clip)
-        except Exception as e:
-            print(f"Error procesando imagen {img_path}: {e}")
-            continue
+            
+        final_video = concatenate_videoclips(clips, method="compose")
+        final_video = final_video.set_audio(AudioFileClip(audio_file))
+        final_video.write_videofile("final_video.mp4", fps=24, codec='libx264', audio_codec='aac')
+        print("✅ Video generado exitosamente.")
+        return "final_video.mp4"
         
-    if not clips:
+    except Exception as e:
+        print(f"❌ Error creando video: {e}")
         return None
-        
-    final_video = concatenate_videoclips(clips, method="compose")
-    final_video = final_video.set_audio(AudioFileClip(audio_file))
-    final_video.write_videofile("final_video.mp4", fps=24, codec='libx264', audio_codec='aac')
-    return "final_video.mp4"
 
 def main():
     print("--- INICIANDO SISTEMA AUTÓNOMO ---")
@@ -162,19 +177,19 @@ def main():
     audio_file = generate_voice(script)
     if not audio_file:
         print("Fallo al generar voz. Deteniendo proceso.")
-        return
+        sys.exit(1)
     
     images = generate_images(topic, style)
     if not images:
         print("Fallo al generar imágenes. Deteniendo proceso.")
-        return
+        sys.exit(1)
     
     video_file = create_video(images, audio_file)
     if not video_file:
         print("Fallo al crear video. Deteniendo proceso.")
-        return
+        sys.exit(1)
     
-    print(f"✅ VIDEO GENERADO EXITOSAMENTE: {video_file}")
+    print(f"🎉 ¡PROCESO COMPLETADO! Video listo: {video_file}")
 
 if __name__ == "__main__":
     main()
