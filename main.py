@@ -1,45 +1,41 @@
 import os
 import random
-import time
-from elevenlabs import generate, save
+import sys
+import requests
+from io import BytesIO
+from PIL import Image
 import replicate
 from moviepy.editor import ImageClip, AudioFileClip, concatenate_videoclips
 
 # --- CONFIGURACIÓN DE SEGURIDAD ---
-# Estas variables se llenarán automáticamente desde GitHub Secrets
 ELEVENLABS_API_KEY = os.getenv("ELEVENLABS_API_KEY")
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 
 if not ELEVENLABS_API_KEY or not REPLICATE_API_TOKEN:
-    raise Exception("Faltan las claves API. Revisa los Secrets de GitHub.")
+    print("ERROR: Faltan las claves API. Revisa los Secrets de GitHub.")
+    sys.exit(1)
 
-# --- BASE DE DATOS DE TEMAS (Puedes agregar cientos aquí) ---
+# --- BASE DE DATOS DE TEMAS ---
 THEMES = [
     "El soldado que salvó a 200 prisioneros usando solo palomas",
     "La mujer espía que hackeó el código Morse en la guerra fría",
     "El ingeniero que detuvo un desastre nuclear con una sola decisión",
     "El explorador perdido que descubrió una civilización olvidada",
-    "El artista que pintó secretos de resistencia en paredes durante la guerra",
-    "El médico que curó epidemias sin medicamentos modernos",
-    "El niño de 10 años que salvó un pueblo de un incendio forestal",
-    "La maestra que enseñó en secreto bajo un régimen totalitario"
+    "El artista que pintó secretos de resistencia en paredes durante la guerra"
 ]
 
-# --- ESTILOS VISUALES DINÁMICOS (Para evitar penalización de spam) ---
 STYLES = [
-    "cinematic film noir, high contrast black and white, dramatic shadows, grainy texture",
-    "watercolor painting, soft historical illustration, muted colors, vintage paper texture",
-    "oil painting, classical style, dramatic lighting, intense emotion, brush strokes visible",
-    "charcoal sketch, gritty texture, rough lines, intense mood, monochrome",
-    "hyper-realistic photography, 8k resolution, documentary style, shallow depth of field"
+    "cinematic film noir, high contrast black and white, dramatic shadows",
+    "watercolor painting, soft historical illustration, muted colors",
+    "oil painting, classical style, dramatic lighting, intense emotion",
+    "charcoal sketch, gritty texture, rough lines, intense mood",
+    "hyper-realistic photography, 8k resolution, documentary style"
 ]
 
 def get_topic():
     return random.choice(THEMES)
 
 def generate_script(topic):
-    # Simulación de llamada a LLM (En producción real usarías OpenAI API aquí)
-    # Para este ejemplo, generamos un guion estructurado basado en el tema
     hooks = [
         f"¿Sabías que {topic}? Nadie conoce su nombre, pero...",
         f"Lo que ocurrió con {topic} fue borrado de los libros de historia.",
@@ -59,14 +55,29 @@ def generate_script(topic):
     return script.strip()
 
 def generate_voice(script):
+    url = "https://api.elevenlabs.io/v1/text-to-speech/Rachel"
+    headers = {
+        "xi-api-key": ELEVENLABS_API_KEY,
+        "Content-Type": "application/json"
+    }
+    data = {
+        "text": script,
+        "model_id": "eleven_multilingual_v2",
+        "voice_settings": {
+            "stability": 0.5,
+            "similarity_boost": 0.75
+        }
+    }
+    
     try:
-        audio = generate(
-            text=script, 
-            voice="Rachel", # Voz femenina emotiva y clara
-            model="eleven_multilingual_v2"
-        )
-        save(audio, "voiceover.mp3")
-        return "voiceover.mp3"
+        response = requests.post(url, json=data, headers=headers)
+        if response.status_code == 200:
+            with open("voiceover.mp3", "wb") as f:
+                f.write(response.content)
+            return "voiceover.mp3"
+        else:
+            print(f"Error ElevenLabs: {response.status_code} - {response.text}")
+            return None
     except Exception as e:
         print(f"Error generando voz: {e}")
         return None
@@ -87,16 +98,21 @@ def generate_images(topic, style):
                     "prompt": prompt,
                     "negative_prompt": "blurry, low quality, cartoon, text, watermark, deformed",
                     "width": 1024,
-                    "height": 1920, # Formato vertical para Shorts/TikTok
+                    "height": 1920, 
                     "num_inference_steps": 25
                 }
             )
-            # Replicate devuelve una URL, necesitamos descargarla localmente para MoviePy
             img_url = output[0]
-            img_filename = f"img_{i}.png"
-            with open(img_filename, "wb") as f:
-                f.write(requests.get(img_url).content)
-            images.append(img_filename)
+            
+            # Descargar imagen directamente
+            response = requests.get(img_url)
+            img_data = BytesIO(response.content)
+            image = Image.open(img_data)
+            
+            filename = f"img_{i}.png"
+            image.save(filename)
+            images.append(filename)
+            
         except Exception as e:
             print(f"Error generando imagen {i}: {e}")
             continue
@@ -108,14 +124,24 @@ def create_video(images, audio_file):
         return None
         
     clips = []
-    audio_duration = AudioFileClip(audio_file).duration
+    try:
+        audio_duration = AudioFileClip(audio_file).duration
+    except Exception as e:
+        print(f"Error cargando audio: {e}")
+        return None
+        
     duration_per_img = audio_duration / len(images)
     
     for img_path in images:
-        clip = ImageClip(img_path).set_duration(duration_per_img)
-        # Efecto simple de zoom lento (Ken Burns effect simulado)
-        # clip = clip.resize(lambda t: 1 + 0.05*t) 
-        clips.append(clip)
+        try:
+            clip = ImageClip(img_path).set_duration(duration_per_img)
+            clips.append(clip)
+        except Exception as e:
+            print(f"Error procesando imagen {img_path}: {e}")
+            continue
+        
+    if not clips:
+        return None
         
     final_video = concatenate_videoclips(clips, method="compose")
     final_video = final_video.set_audio(AudioFileClip(audio_file))
@@ -134,19 +160,21 @@ def main():
     print("Guion generado.")
     
     audio_file = generate_voice(script)
-    if not audio_file: return
+    if not audio_file:
+        print("Fallo al generar voz. Deteniendo proceso.")
+        return
     
     images = generate_images(topic, style)
-    if not images: return
+    if not images:
+        print("Fallo al generar imágenes. Deteniendo proceso.")
+        return
     
     video_file = create_video(images, audio_file)
-    if not video_file: return
+    if not video_file:
+        print("Fallo al crear video. Deteniendo proceso.")
+        return
     
-    print(f"✅ VIDEO LISTO: {video_file}")
-    print("Listo para subir a plataformas (simulado).")
-    
-    # Aquí iría la lógica de subida a TikTok/YouTube usando sus APIs
-    # Por ahora, el video se guarda en la carpeta del repositorio
+    print(f"✅ VIDEO GENERADO EXITOSAMENTE: {video_file}")
 
 if __name__ == "__main__":
     main()
