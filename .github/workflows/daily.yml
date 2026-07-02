@@ -2,8 +2,8 @@ name: Daily Video Generator
 
 on:
   schedule:
-    - cron: '0 12 * * *' # Ejecución diaria a las 12:00 UTC
-  workflow_dispatch: # Permite ejecutar manualmente
+    - cron: '0 12 * * *' 
+  workflow_dispatch: 
 
 jobs:
   generate-video:
@@ -19,6 +19,7 @@ jobs:
 
       - name: Install dependencies
         run: |
+          pip install --upgrade pip
           pip install elevenlabs replicate moviepy requests pillow
 
       - name: Run Generator
